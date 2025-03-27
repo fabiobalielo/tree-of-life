@@ -28,15 +28,11 @@ import TreeOfLifeVisualization, {
 } from "@/components/kabbalah/TreeOfLifeVisualization";
 import { KabbalahChat } from "@/components/kabbalah/chat";
 
-interface KabbalahPageProps {
-  tree?: TreeOfLife;
-}
-
-export default function KabbalahPage({
-  tree = traditionalTreeOfLife,
-}: KabbalahPageProps) {
+export default function KabbalahPage() {
   const visualizationRef = useRef<TreeOfLifeVisualizationRef>(null);
-  const [currentTree, setCurrentTree] = useState<TreeOfLife>(tree);
+  const [currentTree, setCurrentTree] = useState<TreeOfLife>(
+    traditionalTreeOfLife
+  );
   const [activeTab, setActiveTab] = useState<string>("interpretation");
 
   // Dialog state

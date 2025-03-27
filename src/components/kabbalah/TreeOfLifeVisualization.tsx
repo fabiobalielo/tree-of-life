@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState } from "react";
 import * as THREE from "three";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { OrbitControls } from "three-stdlib";
 import { TreeOfLife } from "@/app/models/TreeOfLife.interface";
 
 // Helper to convert ID-based path references to array indices

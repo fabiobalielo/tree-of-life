@@ -8,6 +8,11 @@ const nextConfig: NextConfig = {
       ...config.resolve.alias,
       three: require.resolve("three"),
     };
+
+    // Add specific alias for the examples folder
+    config.resolve.alias["three/examples/jsm/controls/OrbitControls.js"] =
+      require.resolve("three/examples/jsm/controls/OrbitControls.js");
+
     return config;
   },
 };
