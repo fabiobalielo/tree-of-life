@@ -40,6 +40,7 @@ export default React.forwardRef<
   const animationFrameIdRef = useRef<number | null>(null);
   const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
   const mouseRef = useRef<THREE.Vector2>(new THREE.Vector2());
+  const [isMobile, setIsMobile] = useState(false);
 
   // Reference to event handler functions for proper cleanup
   const controlChangeHandlerRef = useRef<() => void>(() => {});
@@ -55,6 +56,22 @@ export default React.forwardRef<
     updateScene();
   }, [tree]);
 
+  // Check if device is mobile
+  useEffect(() => {
+    const checkIfMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+
+    // Initial check
+    checkIfMobile();
+
+    // Add event listener
+    window.addEventListener("resize", checkIfMobile);
+
+    // Cleanup
+    return () => window.removeEventListener("resize", checkIfMobile);
+  }, []);
+
   const updateScene = () => {
     if (!sceneRef.current || !treeRef.current) return;
 
@@ -63,27 +80,13 @@ export default React.forwardRef<
     // Create arrays to track all objects that need to be removed
     const objectsToRemove: THREE.Object3D[] = [];
 
-    // Find and collect all objects to remove (spheres, glow spheres, lines, tubes, and text labels)
+    // Find and collect all objects to remove
     sceneRef.current.traverse((object) => {
-      // Remove spheres (both regular and glow spheres)
-      if (object.type === "Mesh") {
-        const mesh = object as THREE.Mesh;
-        if (mesh.geometry instanceof THREE.SphereGeometry) {
-          objectsToRemove.push(mesh);
-        }
-        // Also remove tube geometries used for path rendering
-        if (mesh.geometry instanceof THREE.TubeGeometry) {
-          objectsToRemove.push(mesh);
-        }
-      }
-
-      // Remove lines
-      if (object.type === "Line") {
-        objectsToRemove.push(object);
-      }
-
-      // Remove text labels (sprites)
-      if (object.type === "Sprite" && object.name.startsWith("label-")) {
+      if (
+        object.type === "Mesh" ||
+        object.type === "Line" ||
+        (object.type === "Sprite" && object.name.startsWith("label-"))
+      ) {
         objectsToRemove.push(object);
       }
     });
@@ -92,218 +95,141 @@ export default React.forwardRef<
     objectsToRemove.forEach((object) => {
       sceneRef.current?.remove(object);
 
-      // Dispose geometries and materials to prevent memory leaks
-      if (object.type === "Mesh" || object.type === "Line") {
-        const mesh = object as THREE.Mesh;
-        if (mesh.geometry) {
-          mesh.geometry.dispose();
-        }
+      // Dispose geometries and materials
+      if (object instanceof THREE.Mesh || object instanceof THREE.Line) {
+        if (object.geometry) object.geometry.dispose();
 
-        if (mesh.material) {
-          const material = mesh.material;
-          if (Array.isArray(material)) {
-            material.forEach((m) => m.dispose());
+        if (object.material) {
+          if (Array.isArray(object.material)) {
+            object.material.forEach((m) => m.dispose());
           } else {
-            material.dispose();
+            object.material.dispose();
           }
         }
       }
 
-      if (object.type === "Sprite") {
-        const sprite = object as THREE.Sprite;
-        if (sprite.material) {
-          const material = sprite.material as THREE.SpriteMaterial;
-          if (material.map) {
-            material.map.dispose();
+      if (object instanceof THREE.Sprite) {
+        if (object.material) {
+          (object.material as THREE.SpriteMaterial).dispose();
+          if ((object.material as THREE.SpriteMaterial).map) {
+            (object.material as THREE.SpriteMaterial).map?.dispose();
           }
-          material.dispose();
         }
       }
     });
 
-    // Reset our reference arrays before we start creating new objects
-    spheresRef.current = [];
-    linesRef.current = [];
-
-    console.log(`Cleared ${objectsToRemove.length} objects from the scene`);
-
-    // Re-create spheres and lines based on new tree data
+    // Add new objects
     const currentTree = treeRef.current;
+    const pathIndices = getPathIndices(currentTree);
+
     const createdSpheres: THREE.Object3D[] = [];
     const createdLines: THREE.Object3D[] = [];
 
-    // Create the Sephiroth (spheres)
-    currentTree.sephiroth.forEach((sephirah) => {
-      const sphereSize =
-        sephirah.renderOptions?.size ||
-        currentTree.visualSettings?.sphereSize ||
-        1.2;
-      const geometry = new THREE.SphereGeometry(sphereSize, 32, 32);
-      const material = new THREE.MeshStandardMaterial({
+    // Create spheres
+    currentTree.sephiroth.forEach((sephirah, index) => {
+      // Create sphere
+      const sphereSize = sephirah.renderOptions?.size || 1.2;
+      const sphereGeometry = new THREE.SphereGeometry(sphereSize, 32, 32);
+      const sphereMaterial = new THREE.MeshBasicMaterial({
         color: sephirah.color,
-        metalness: 0.1,
-        roughness: 0.2,
-        emissive: new THREE.Color(sephirah.color),
-        emissiveIntensity: sephirah.renderOptions?.glowIntensity || 0.8,
-        flatShading: false,
+        transparent: true,
+        opacity: 0.9,
       });
-      const sphere = new THREE.Mesh(geometry, material);
+
+      const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
       sphere.position.set(...sephirah.position);
 
-      // Store both traditional and personalized interpretations in userData
-      const sephirahData = {
-        ...sephirah,
-        interpretation: sephirah.description, // Store personalized interpretation
-        description:
-          (sephirah as any).traditionalDescription || sephirah.description, // Use traditional description if available
+      // Store data for interaction
+      sphere.userData = {
+        sephirahInfo: {
+          ...sephirah,
+          interpretation: sephirah.description,
+          description:
+            (sephirah as any).traditionalDescription || sephirah.description,
+        },
+        sephirahIndex: index,
       };
 
-      // Store the sephirah info in userData for easy reference
-      sphere.userData = { sephirahInfo: sephirahData };
       sceneRef.current?.add(sphere);
       createdSpheres.push(sphere);
 
-      // Add a glow effect using a larger transparent sphere
-      const glowGeometry = new THREE.SphereGeometry(sphereSize * 1.6, 32, 32);
+      // Create glow effect
+      const glowSize = sphereSize * 1.3;
+      const glowGeometry = new THREE.SphereGeometry(glowSize, 32, 32);
       const glowMaterial = new THREE.MeshBasicMaterial({
-        color: sephirah.renderOptions?.glowColor || sephirah.color,
+        color: sephirah.color,
         transparent: true,
-        opacity: 0.25, // Static opacity for the glow
-        depthWrite: false, // Prevents the glow from being occluded
+        opacity: 0.4,
+        side: THREE.BackSide,
       });
+
       const glowSphere = new THREE.Mesh(glowGeometry, glowMaterial);
       glowSphere.position.set(...sephirah.position);
+      glowSphere.userData = { isGlow: true };
       sceneRef.current?.add(glowSphere);
+      createdSpheres.push(glowSphere);
 
-      // Add text label
-      const canvas = document.createElement("canvas");
-      const context = canvas.getContext("2d");
-      if (context) {
-        // Increase canvas size for better resolution
-        canvas.width = 512;
-        canvas.height = 512;
+      // Create label
+      if (sephirah.name) {
+        const canvas = document.createElement("canvas");
+        canvas.width = 256;
+        canvas.height = 128;
+        const context = canvas.getContext("2d");
 
-        // Set high quality text rendering
-        context.imageSmoothingEnabled = true;
-        context.imageSmoothingQuality = "high";
+        if (context) {
+          context.clearRect(0, 0, canvas.width, canvas.height);
 
-        // Clear the canvas with a transparent background
-        context.clearRect(0, 0, canvas.width, canvas.height);
-
-        // No background box - just text on transparent background
-
-        // Draw the number with slight text shadow for better visibility against lines
-        context.fillStyle = "#ffffff";
-        context.shadowColor = "rgba(0, 0, 0, 0.7)";
-        context.shadowBlur = 5;
-        context.shadowOffsetX = 1;
-        context.shadowOffsetY = 1;
-
-        // Draw the number
-        if (currentTree.visualSettings?.showNumbers !== false) {
-          context.font = "Bold 64px Arial";
+          // Text style
+          context.fillStyle = "#ffffff";
+          context.font = "bold 24px Arial";
           context.textAlign = "center";
-          context.fillText(sephirah.number.toString(), canvas.width / 2, 180);
-        }
+          context.textBaseline = "middle";
 
-        // Draw the English name (display name)
-        if (currentTree.visualSettings?.showEnglishNames !== false) {
-          const displayName =
-            sephirah.displayName?.replace("\n", " - ") || sephirah.name;
-          context.font = `Bold 42px ${
-            currentTree.visualSettings?.textLabelFont || "Arial"
-          }`;
-          context.fillText(displayName, canvas.width / 2, 260);
-        }
+          // Background
+          const metrics = context.measureText(sephirah.name);
+          const textWidth = metrics.width;
+          const bgPadding = 10;
+          context.fillStyle = "#00000088";
+          context.fillRect(
+            canvas.width / 2 - textWidth / 2 - bgPadding,
+            canvas.height / 2 - 12 - bgPadding,
+            textWidth + bgPadding * 2,
+            24 + bgPadding * 2
+          );
 
-        // Draw the Hebrew name
-        if (currentTree.visualSettings?.showHebrewNames !== false) {
-          try {
-            context.font = `Bold 54px ${
-              currentTree.visualSettings?.textLabelFont || "Arial"
-            }`;
-            // Ensure hebrewName is a string before drawing
-            const hebrewText =
-              typeof sephirah.hebrewName === "string"
-                ? sephirah.hebrewName
-                : String(sephirah.hebrewName || "");
-            context.fillText(hebrewText, canvas.width / 2, 340);
-          } catch (error) {
-            console.warn("Error rendering Hebrew text:", error);
-            // Use fallback text if Hebrew rendering fails
-            context.fillText(sephirah.name, canvas.width / 2, 340);
-          }
-        }
+          // Text
+          context.fillStyle = "#ffffff";
+          context.fillText(sephirah.name, canvas.width / 2, canvas.height / 2);
 
-        let texture = null;
-        try {
-          texture = new THREE.CanvasTexture(canvas);
-          // Improve the texture quality
-          texture.anisotropy = 16;
-          texture.minFilter = THREE.LinearFilter;
-          texture.magFilter = THREE.LinearFilter;
-          texture.needsUpdate = true;
-        } catch (error) {
-          console.error("Error creating texture:", error);
-          // Create a simple fallback texture
-          const fallbackCanvas = document.createElement("canvas");
-          fallbackCanvas.width = 128;
-          fallbackCanvas.height = 128;
-          const fallbackContext = fallbackCanvas.getContext("2d");
-          if (fallbackContext) {
-            fallbackContext.fillStyle = "#ffffff";
-            fallbackContext.textAlign = "center";
-            fallbackContext.font = "Bold 24px Arial";
-            fallbackContext.fillText(sephirah.name, 64, 64);
-            texture = new THREE.CanvasTexture(fallbackCanvas);
-          }
-        }
-
-        // Only create sprite if we have a valid texture
-        if (texture) {
+          const texture = new THREE.CanvasTexture(canvas);
           const spriteMaterial = new THREE.SpriteMaterial({
             map: texture,
             transparent: true,
-            opacity: 1.0, // Full opacity since we have no background
-            depthTest: false, // Disable depth testing to ensure visibility over lines
-            depthWrite: false, // Don't write to depth buffer
-            sizeAttenuation: true,
           });
 
           const sprite = new THREE.Sprite(spriteMaterial);
+          sprite.name = `label-${sephirah.id}`;
+          sprite.scale.set(5, 2.5, 1);
 
-          // Initial position, will be adjusted in the animation loop
-          sprite.position.copy(sphere.position);
+          // Position below sphere
+          const yOffset = isMobile ? -2.5 : -2;
+          sprite.position.set(
+            sephirah.position[0],
+            sephirah.position[1] + yOffset,
+            sephirah.position[2]
+          );
 
-          // Make the label bigger
-          const textScale = currentTree.visualSettings?.textLabelSize || 4.0;
-          const customScale = sephirah.renderOptions?.textScale || 1.0;
-          sprite.scale.set(textScale * customScale, textScale * customScale, 1);
-
-          // Give the sprite a unique name for identification
-          sprite.name = `label-${sephirah.name}`;
-
-          // Store a reference to the associated sphere for dynamic positioning
-          sprite.userData = { sphereRef: sphere, sephirahInfo: sephirahData };
-
-          // Set high render order to ensure it renders on top of lines
-          sprite.renderOrder = 2000;
-
+          sprite.userData = { isLabel: true, labelForSephirah: sephirah.id };
           sceneRef.current?.add(sprite);
         }
       }
     });
 
-    // Store the created spheres in ref
-    spheresRef.current = createdSpheres;
-
-    // Create the paths (lines)
-    const pathIndices = getPathIndices(currentTree);
-
+    // Create paths
     currentTree.paths.forEach((path, pathIndex) => {
       const [startIdx, endIdx] = pathIndices[pathIndex];
 
-      // Safety check to make sure indices are valid
+      // Safety check
       if (
         startIdx === -1 ||
         endIdx === -1 ||
@@ -314,7 +240,6 @@ export default React.forwardRef<
           `Invalid path indices: ${startIdx}, ${endIdx} for path:`,
           path
         );
-        // Return a dummy object to avoid errors
         return;
       }
 
@@ -324,295 +249,216 @@ export default React.forwardRef<
       // Handle curved paths
       let points;
       if (path.curved) {
-        // Create a curved path
         const controlPoint = path.controlPoint
           ? new THREE.Vector3(...path.controlPoint)
-          : new THREE.Vector3(0, 9, 0); // Default control point if not specified
+          : new THREE.Vector3(0, 9, 0);
 
         points = [
           new THREE.Vector3(...startPos),
           controlPoint,
           new THREE.Vector3(...endPos),
         ];
+
         const curve = new THREE.QuadraticBezierCurve3(
           points[0],
           points[1],
           points[2]
         );
-        // Get points along the curve for a smooth path
         points = curve.getPoints(20);
       } else {
         points = [new THREE.Vector3(...startPos), new THREE.Vector3(...endPos)];
       }
 
-      // Create thicker lines by using a tube geometry
-      let tubePath, tubeGeometry;
-      const thickness =
-        path.renderOptions?.thickness ||
-        currentTree.visualSettings?.pathThickness ||
-        0.12;
+      // Create tube for visual representation
+      const thickness = path.renderOptions?.thickness || 0.12;
+      const tubePath = new THREE.CatmullRomCurve3(points);
+      const segments = path.curved ? 20 : 1;
+      const tubeGeometry = new THREE.TubeGeometry(
+        tubePath,
+        segments,
+        thickness,
+        8,
+        false
+      );
 
-      if (path.curved) {
-        tubePath = new THREE.CatmullRomCurve3(points);
-        tubeGeometry = new THREE.TubeGeometry(
-          tubePath,
-          20,
-          thickness,
-          8,
-          false
-        );
-      } else {
-        tubePath = new THREE.CatmullRomCurve3(points);
-        tubeGeometry = new THREE.TubeGeometry(tubePath, 1, thickness, 8, false);
-      }
-
-      const opacity = path.renderOptions?.opacity || 0.8;
       const material = new THREE.MeshBasicMaterial({
         color: path.color,
         transparent: true,
-        opacity: opacity,
+        opacity: 0.8,
       });
 
       const tube = new THREE.Mesh(tubeGeometry, material);
       sceneRef.current?.add(tube);
 
-      // We still need a line object for raycasting
+      // Create line for interaction
       const lineGeometry = new THREE.BufferGeometry().setFromPoints(points);
       const lineMaterial = new THREE.LineBasicMaterial({
         color: path.color,
-        opacity: opacity,
         transparent: true,
-        linewidth: 2,
+        opacity: 0.8,
       });
 
       const line = new THREE.Line(lineGeometry, lineMaterial);
 
-      // Store both traditional and personalized interpretations in userData
-      const pathData = {
-        ...path,
-        interpretation: path.description, // Store personalized interpretation
-        description: (path as any).traditionalDescription || path.description, // Use traditional if available
+      line.userData = {
+        pathInfo: {
+          ...path,
+          interpretation: path.description,
+          description: (path as any).traditionalDescription || path.description,
+        },
+        pathIndex,
       };
 
-      line.userData = { pathInfo: pathData, pathIndex: pathIndex }; // Store the path data
       sceneRef.current?.add(line);
-
       createdLines.push(line);
     });
 
-    // Store the created lines in ref
+    // Store references
+    spheresRef.current = createdSpheres;
     linesRef.current = createdLines;
-
-    console.log("Scene updated with new tree data");
   };
 
   const resetCamera = () => {
     if (cameraRef.current && controlsRef.current) {
-      cameraRef.current.position.set(0, 0, 25);
+      // Adjust for mobile
+      const distance = isMobile ? 30 : 25;
+      cameraRef.current.position.set(0, 0, distance);
       controlsRef.current.reset();
     }
   };
 
   const zoomIn = () => {
     if (cameraRef.current && controlsRef.current) {
-      cameraRef.current.position.z -= 2;
+      const zoomStep = isMobile ? 3 : 2;
+      cameraRef.current.position.z -= zoomStep;
       controlsRef.current.update();
     }
   };
 
   const zoomOut = () => {
     if (cameraRef.current && controlsRef.current) {
-      cameraRef.current.position.z += 2;
+      const zoomStep = isMobile ? 3 : 2;
+      cameraRef.current.position.z += zoomStep;
       controlsRef.current.update();
     }
   };
 
-  const handleMouseMove = (event: MouseEvent) => {
+  // Handle mouse/touch position updates
+  const updatePointerPosition = (clientX: number, clientY: number) => {
     if (!containerRef.current) return;
 
     const rect = containerRef.current.getBoundingClientRect();
-    mouseRef.current.x =
-      ((event.clientX - rect.left) / containerRef.current.clientWidth) * 2 - 1;
-    mouseRef.current.y =
-      -((event.clientY - rect.top) / containerRef.current.clientHeight) * 2 + 1;
+    const x =
+      ((clientX - rect.left) / containerRef.current.clientWidth) * 2 - 1;
+    const y =
+      -((clientY - rect.top) / containerRef.current.clientHeight) * 2 + 1;
 
-    checkHover();
+    mouseRef.current.set(x, y);
   };
 
-  const handleClick = (event: MouseEvent) => {
+  const onMouseMove = (event: MouseEvent) => {
+    updatePointerPosition(event.clientX, event.clientY);
+  };
+
+  const onTouchMove = (event: TouchEvent) => {
+    if (event.touches.length === 0) return;
+    updatePointerPosition(event.touches[0].clientX, event.touches[0].clientY);
+  };
+
+  // Handle interactions
+  const onClick = (event: MouseEvent | TouchEvent) => {
     if (!containerRef.current || !cameraRef.current || !sceneRef.current)
       return;
 
-    const rect = containerRef.current.getBoundingClientRect();
-    mouseRef.current.x =
-      ((event.clientX - rect.left) / containerRef.current.clientWidth) * 2 - 1;
-    mouseRef.current.y =
-      -((event.clientY - rect.top) / containerRef.current.clientHeight) * 2 + 1;
+    // Get pointer position
+    let clientX: number, clientY: number;
 
+    if ("touches" in event) {
+      // Touch event
+      if (event.changedTouches.length === 0) return;
+      clientX = event.changedTouches[0].clientX;
+      clientY = event.changedTouches[0].clientY;
+    } else {
+      // Mouse event
+      clientX = event.clientX;
+      clientY = event.clientY;
+    }
+
+    updatePointerPosition(clientX, clientY);
+
+    // Raycast
     raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current);
 
-    // Increase the precision for raycasting
-    raycasterRef.current.params.Line = { threshold: 0.2 };
-    raycasterRef.current.params.Points = { threshold: 0.2 };
-
-    // Check for sphere intersections
+    // Check spheres first
     const sphereIntersects = raycasterRef.current.intersectObjects(
-      spheresRef.current
+      spheresRef.current.filter((obj) => !obj.userData.isGlow)
     );
+
     if (sphereIntersects.length > 0) {
-      const sphere = sphereIntersects[0].object as THREE.Mesh<
-        THREE.BufferGeometry,
-        THREE.Material | THREE.Material[]
-      >;
-      // Get the sephirah data from the userData
-      const sephirahInfo = sphere.userData.sephirahInfo;
-
-      if (sephirahInfo && onSephirahClick) {
-        // Find traditional meaning for this sephirah
-        let traditionalDescription = "";
-        if (treeRef.current) {
-          const traditionalSephiroth = treeRef.current.sephiroth.find(
-            (s) => s.id === sephirahInfo.id
-          );
-          if (traditionalSephiroth) {
-            // Store traditional data separately from personalized interpretation
-            traditionalDescription = traditionalSephiroth.description || "";
-          }
-        }
-
-        // Create enhanced data object with all relevant info
-        const enhancedInfo = {
-          ...sephirahInfo,
-          title: `${sephirahInfo.number}. ${sephirahInfo.name}`,
-          fullName: sephirahInfo.displayName || sephirahInfo.name,
-          hebrewName: sephirahInfo.hebrewName,
-          description: traditionalDescription, // Traditional description
-          interpretation: sephirahInfo.interpretation, // Personalized interpretation
-          position: Array.from(sphere.position),
-          color: sephirahInfo.color,
-          // Add additional traditional attributes if available
-          divineName: sephirahInfo.divineName,
-          archangel: sephirahInfo.archangel,
-          angelicChoir: sephirahInfo.angelicChoir,
-          spiritualExperience: sephirahInfo.spiritualExperience,
-          virtue: sephirahInfo.virtue,
-          vice: sephirahInfo.vice,
-          world: sephirahInfo.world,
-          pillar: sephirahInfo.pillar,
-        };
-
-        onSephirahClick(enhancedInfo);
+      const clickedSphere = sphereIntersects[0].object;
+      if (clickedSphere.userData.sephirahInfo && onSephirahClick) {
+        onSephirahClick(clickedSphere.userData.sephirahInfo);
       }
       return;
     }
 
-    // Check for line intersections
+    // Then check paths
     const lineIntersects = raycasterRef.current.intersectObjects(
       linesRef.current
     );
+
     if (lineIntersects.length > 0) {
-      const line = lineIntersects[0].object as THREE.Line<
-        THREE.BufferGeometry,
-        THREE.Material | THREE.Material[]
-      >;
-
-      // Get path info from userData
-      const pathInfo = line.userData.pathInfo;
-
-      if (pathInfo && onPathClick) {
-        // Find source and target sephiroth
-        const sourceSephirah = treeRef.current.sephiroth.find(
-          (s) => s.id === pathInfo.sourceId
-        );
-        const targetSephirah = treeRef.current.sephiroth.find(
-          (s) => s.id === pathInfo.targetId
-        );
-
-        // Find traditional meaning for this path
-        let traditionalDescription = "";
-        if (treeRef.current) {
-          const traditionalPath = treeRef.current.paths.find(
-            (p) =>
-              (p.sourceId === pathInfo.sourceId &&
-                p.targetId === pathInfo.targetId) ||
-              (p.sourceId === pathInfo.targetId &&
-                p.targetId === pathInfo.sourceId)
-          );
-          if (traditionalPath) {
-            // Store traditional data separately
-            traditionalDescription = traditionalPath.description || "";
-          }
-        }
-
-        // Create enhanced data object with connection context
-        const enhancedInfo = {
-          ...pathInfo,
-          title:
-            pathInfo.name || `Path ${pathInfo.sourceId}-${pathInfo.targetId}`,
-          description: traditionalDescription, // Traditional description
-          interpretation: pathInfo.interpretation, // Personalized interpretation
-          sourceName: sourceSephirah?.name || `Sephirah ${pathInfo.sourceId}`,
-          targetName: targetSephirah?.name || `Sephirah ${pathInfo.targetId}`,
-          hebrewLetter: pathInfo.hebrewLetter,
-          tarotCard: pathInfo.tarotCard,
-          element: pathInfo.element,
-          astrologicalCorrespondence: pathInfo.astrologicalCorrespondence,
-          color: pathInfo.color,
-        };
-
-        onPathClick(enhancedInfo);
+      const clickedLine = lineIntersects[0].object;
+      if (clickedLine.userData.pathInfo && onPathClick) {
+        onPathClick(clickedLine.userData.pathInfo);
       }
     }
   };
 
+  // Check hover effects
   const checkHover = () => {
-    if (!cameraRef.current || !sceneRef.current) return;
+    if (!containerRef.current || !cameraRef.current || !sceneRef.current)
+      return;
 
     raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current);
-    // Increase the precision for raycasting
-    raycasterRef.current.params.Line = { threshold: 0.2 };
-    raycasterRef.current.params.Points = { threshold: 0.2 };
 
-    // Reset all hover states
-    spheresRef.current.forEach((sphere) => {
-      // Use type assertion to access material property
-      const meshSphere = sphere as THREE.Mesh<
-        THREE.BufferGeometry,
-        THREE.MeshStandardMaterial
+    // Reset all objects
+    spheresRef.current.forEach((obj) => {
+      if (obj.userData.isGlow) return;
+
+      const sphere = obj as THREE.Mesh<
+        THREE.SphereGeometry,
+        THREE.MeshBasicMaterial
       >;
-      if (meshSphere.material) {
-        meshSphere.material.emissiveIntensity = 0.8; // Match the static emissive intensity
+      if (sphere.material) {
+        sphere.material.opacity = 0.9;
       }
-      // Reset scale to normal
-      sphere.scale.set(1, 1, 1);
     });
 
-    linesRef.current.forEach((line) => {
-      // Use type assertion to access material property
-      const lineMesh = line as THREE.Line<
+    linesRef.current.forEach((obj) => {
+      const line = obj as THREE.Line<
         THREE.BufferGeometry,
         THREE.LineBasicMaterial
       >;
-      if (lineMesh.material) {
-        lineMesh.material.opacity = 0.6;
+      if (line.material) {
+        line.material.opacity = 0.8;
       }
     });
 
-    // Check for sphere intersections
+    // Check for hover on spheres
     const sphereIntersects = raycasterRef.current.intersectObjects(
-      spheresRef.current
+      spheresRef.current.filter((obj) => !obj.userData.isGlow)
     );
+
     if (sphereIntersects.length > 0) {
       const hoveredSphere = sphereIntersects[0].object as THREE.Mesh<
-        THREE.BufferGeometry,
-        THREE.MeshStandardMaterial
+        THREE.SphereGeometry,
+        THREE.MeshBasicMaterial
       >;
-      if (hoveredSphere.material) {
-        hoveredSphere.material.emissiveIntensity = 1.5; // Higher intensity on hover
-      }
 
-      // Scale up slightly on hover
-      hoveredSphere.scale.set(1.15, 1.15, 1.15);
+      if (hoveredSphere.material) {
+        hoveredSphere.material.opacity = 1.0;
+      }
 
       if (containerRef.current) {
         containerRef.current.style.cursor = "pointer";
@@ -620,17 +466,19 @@ export default React.forwardRef<
       return;
     }
 
-    // Check for line intersections
+    // Check for hover on lines
     const lineIntersects = raycasterRef.current.intersectObjects(
       linesRef.current
     );
+
     if (lineIntersects.length > 0) {
       const hoveredLine = lineIntersects[0].object as THREE.Line<
         THREE.BufferGeometry,
         THREE.LineBasicMaterial
       >;
+
       if (hoveredLine.material) {
-        hoveredLine.material.opacity = 1.0; // More visible on hover
+        hoveredLine.material.opacity = 1.0;
       }
 
       if (containerRef.current) {
@@ -648,29 +496,24 @@ export default React.forwardRef<
   useEffect(() => {
     if (!containerRef.current) return;
 
-    // Get tree data
-    const tree = treeRef.current;
-
-    // Initialize scene
+    // Create scene
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(
-      tree.visualSettings?.backgroundColor || 0x0a0a25
-    );
+    scene.background = new THREE.Color(0x0a0a25);
     sceneRef.current = scene;
 
-    // Initialize camera with adjusted settings to better fit container
+    // Create camera with mobile adjustments
     const camera = new THREE.PerspectiveCamera(
-      60,
+      isMobile ? 70 : 60,
       containerRef.current.clientWidth / containerRef.current.clientHeight,
       0.1,
       1000
     );
 
-    // Adjust initial position to better fit the tree
-    camera.position.z = tree.visualSettings?.cameraDistance || 25;
+    // Adjust distance for mobile
+    camera.position.z = isMobile ? 30 : 25;
     cameraRef.current = camera;
 
-    // Initialize renderer
+    // Create renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(
       containerRef.current.clientWidth,
@@ -678,55 +521,43 @@ export default React.forwardRef<
     );
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = tree.visualSettings?.lightIntensity || 1.2;
+    renderer.toneMappingExposure = 1.2;
     containerRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // Add controls
+    // Add controls with mobile adjustments
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.screenSpacePanning = true;
-    controls.enabled = tree.interactiveFeatures?.allowRotation !== false;
 
-    // Create a reusable control change handler function
-    const handleControlChange = () => {
-      // Update text orientation with camera position
-      scene.traverse((object) => {
-        if (object.type === "Sprite" && object.name.startsWith("label-")) {
-          // This ensures the sprite always faces the camera
-          object.lookAt(camera.position);
-        }
-      });
-    };
-
-    // Store the handler for later cleanup
-    controlChangeHandlerRef.current = handleControlChange;
-
-    // Add event listener to make sure text always faces camera after control interaction
-    controls.addEventListener("change", handleControlChange);
+    // Mobile-specific control adjustments
+    if (isMobile) {
+      controls.minDistance = 15;
+      controls.maxDistance = 45;
+      controls.minPolarAngle = Math.PI / 4; // 45 degrees
+      controls.maxPolarAngle = (Math.PI * 3) / 4; // 135 degrees
+    } else {
+      controls.minDistance = 10;
+      controls.maxDistance = 50;
+    }
 
     controlsRef.current = controls;
 
-    // Add ambient light
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
-    scene.add(ambientLight);
+    // Add event listeners
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("touchmove", onTouchMove);
+    window.addEventListener("click", onClick);
+    window.addEventListener("touchend", onClick);
 
-    // Add directional light
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-    directionalLight.position.set(10, 10, 10);
-    scene.add(directionalLight);
+    // Handle control changes
+    const controlChangeHandler = () => {
+      // Update anything that needs to be updated on control changes
+    };
+    controls.addEventListener("change", controlChangeHandler);
+    controlChangeHandlerRef.current = controlChangeHandler;
 
-    // Add a second directional light from below for additional lighting
-    const bottomLight = new THREE.DirectionalLight(0x7080ff, 0.6);
-    bottomLight.position.set(0, -10, 5);
-    scene.add(bottomLight);
-
-    // Add event listeners for mouse interactions
-    containerRef.current.addEventListener("mousemove", handleMouseMove);
-    containerRef.current.addEventListener("click", handleClick);
-
-    // Resize handler
+    // Handle window resizing
     const handleResize = () => {
       if (!containerRef.current || !cameraRef.current || !rendererRef.current)
         return;
@@ -734,94 +565,50 @@ export default React.forwardRef<
       cameraRef.current.aspect =
         containerRef.current.clientWidth / containerRef.current.clientHeight;
       cameraRef.current.updateProjectionMatrix();
+
       rendererRef.current.setSize(
         containerRef.current.clientWidth,
         containerRef.current.clientHeight
       );
     };
-
     window.addEventListener("resize", handleResize);
 
-    // Call updateScene to initialize visualization
+    // Build initial scene
     updateScene();
 
     // Animation loop
     const animate = () => {
       animationFrameIdRef.current = requestAnimationFrame(animate);
 
-      // Position sprites to the sides of spheres
-      if (cameraRef.current) {
-        // Get camera position and direction
-        const cameraPosition = new THREE.Vector3();
-        cameraRef.current.getWorldPosition(cameraPosition);
+      // Check hover effects
+      checkHover();
 
-        // Update all sprites
+      // Update labels to face camera
+      if (cameraRef.current) {
+        const cameraPosition = cameraRef.current.position.clone();
+
         scene.traverse((object) => {
           if (object.type === "Sprite" && object.name.startsWith("label-")) {
-            const sprite = object as THREE.Sprite;
-            const sphere = sprite.userData.sphereRef as THREE.Mesh<
-              THREE.BufferGeometry,
-              THREE.Material | THREE.Material[]
-            >;
-
-            if (sphere) {
-              // Get sphere position in world space
-              const spherePos = sphere.position;
-
-              // Determine if this is a left or right sphere based on x position
-              // Place label on the outside of the tree
-              const isRightSideSphere = spherePos.x > 0;
-
-              // For central spheres (Keter, Tiferet, Yesod, Malkuth), position based on their position in the tree
-              let horizontalOffset;
-              if (Math.abs(spherePos.x) < 0.1) {
-                // This is a central sphere - alternate left/right based on position
-                // Bottom spheres (Yesod, Malkuth) labels go right
-                // Top spheres (Keter, Tiferet) labels go left
-                horizontalOffset = spherePos.y < 0 ? 3.5 : -3.5;
-              } else {
-                // For side spheres, place on the outer edge
-                horizontalOffset = isRightSideSphere ? 3.5 : -3.5;
-              }
-
-              // Create base position aligned with sphere but offset horizontally
-              const basePosition = new THREE.Vector3(
-                sphere.position.x + horizontalOffset,
-                sphere.position.y,
-                sphere.position.z
-              );
-
-              // Update sprite position
-              sprite.position.copy(basePosition);
-
-              // Make sprite face camera for readability
-              sprite.lookAt(cameraPosition);
-
-              // Ensure highest render order
-              sprite.renderOrder = 2000;
-            }
+            // Make sprite face camera
+            object.lookAt(cameraPosition);
           }
         });
       }
 
-      // Only animate the path lines if enabled
-      if (tree.interactiveFeatures?.enablePathAnimations !== false) {
-        linesRef.current.forEach((line, i) => {
-          const lineMesh = line as THREE.Line<
-            THREE.BufferGeometry,
-            THREE.LineBasicMaterial
-          >;
-          if (lineMesh.material) {
-            const pulseTime =
-              Date.now() *
-                0.001 *
-                (tree.visualSettings?.animationSpeed || 0.5) +
-              i * 0.2;
-            lineMesh.material.opacity = 0.6 + Math.sin(pulseTime) * 0.2;
-          }
-        });
-      }
+      // Animate paths
+      linesRef.current.forEach((line, i) => {
+        const lineMesh = line as THREE.Line<
+          THREE.BufferGeometry,
+          THREE.LineBasicMaterial
+        >;
 
+        if (lineMesh.material) {
+          const pulseTime = Date.now() * 0.001 * 0.5 + i * 0.2;
+          lineMesh.material.opacity = 0.6 + Math.sin(pulseTime) * 0.2;
+        }
+      });
+
+      // Update controls and render
       if (controlsRef.current) controlsRef.current.update();
       if (rendererRef.current && sceneRef.current && cameraRef.current) {
         rendererRef.current.render(sceneRef.current, cameraRef.current);
@@ -836,58 +623,40 @@ export default React.forwardRef<
         cancelAnimationFrame(animationFrameIdRef.current);
       }
 
+      // Remove event listeners
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("click", onClick);
+      window.removeEventListener("touchend", onClick);
       window.removeEventListener("resize", handleResize);
-      containerRef.current?.removeEventListener("mousemove", handleMouseMove);
-      containerRef.current?.removeEventListener("click", handleClick);
 
-      // Remove controls event listener with the stored handler function
-      controlsRef.current?.removeEventListener(
-        "change",
-        controlChangeHandlerRef.current
-      );
+      // Remove control listeners
+      if (controlsRef.current) {
+        controlsRef.current.removeEventListener(
+          "change",
+          controlChangeHandlerRef.current
+        );
+        controlsRef.current.dispose();
+      }
 
-      // Dispose of all scene objects and materials
+      // Dispose of all scene objects
       if (sceneRef.current) {
         sceneRef.current.traverse((object) => {
-          // Dispose of geometries
-          if (object.type === "Mesh" || object.type === "Line") {
-            const mesh = object as THREE.Mesh<
-              THREE.BufferGeometry,
-              THREE.Material | THREE.Material[]
-            >;
-            if (mesh.geometry) {
-              mesh.geometry.dispose();
-            }
+          if (object instanceof THREE.Mesh) {
+            if (object.geometry) object.geometry.dispose();
 
-            // Dispose of materials
-            if (mesh.material) {
-              const material = mesh.material;
-              if (Array.isArray(material)) {
-                material.forEach((m) => m.dispose());
+            if (object.material) {
+              if (Array.isArray(object.material)) {
+                object.material.forEach((m) => m.dispose());
               } else {
-                material.dispose();
+                object.material.dispose();
               }
-            }
-          }
-
-          // Dispose of sprite materials and textures
-          if (object.type === "Sprite") {
-            const sprite = object as THREE.Sprite;
-            if (sprite.material) {
-              const material = sprite.material as THREE.SpriteMaterial;
-              if (material.map) {
-                material.map.dispose();
-              }
-              material.dispose();
             }
           }
         });
       }
 
-      // Clear reference arrays
-      spheresRef.current = [];
-      linesRef.current = [];
-
+      // Remove renderer
       if (containerRef.current && rendererRef.current) {
         containerRef.current.removeChild(rendererRef.current.domElement);
       }
@@ -896,15 +665,15 @@ export default React.forwardRef<
         rendererRef.current.dispose();
       }
 
-      // Clear references to prevent memory leaks
+      // Clear references
       sceneRef.current = null;
       cameraRef.current = null;
       rendererRef.current = null;
       controlsRef.current = null;
     };
-  }, [onSephirahClick, onPathClick]);
+  }, [onSephirahClick, onPathClick, isMobile]);
 
-  // Expose methods that can be called by the parent component
+  // Expose methods
   React.useImperativeHandle(ref, () => ({
     resetCamera,
     zoomIn,

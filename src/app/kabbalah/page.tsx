@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState } from "react";
+import React, { useRef, useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,6 +12,13 @@ import {
   Sparkles,
   Link2,
   Info,
+  ChevronRight,
+  ChevronLeft,
+  Menu,
+  X,
+  MessageCircle,
+  HelpCircle,
+  Home,
 } from "lucide-react";
 import {
   Dialog,
@@ -27,6 +34,7 @@ import TreeOfLifeVisualization, {
   TreeOfLifeVisualizationRef,
 } from "@/components/kabbalah/TreeOfLifeVisualization";
 import { KabbalahChat } from "@/components/kabbalah/chat";
+import { motion, AnimatePresence } from "framer-motion";
 
 export default function KabbalahPage() {
   const visualizationRef = useRef<TreeOfLifeVisualizationRef>(null);
@@ -34,6 +42,11 @@ export default function KabbalahPage() {
     traditionalTreeOfLife
   );
   const [activeTab, setActiveTab] = useState<string>("interpretation");
+  const [isMobile, setIsMobile] = useState(false);
+  const [showChat, setShowChat] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
+  const [touchStartY, setTouchStartY] = useState(0);
 
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -44,6 +57,31 @@ export default function KabbalahPage() {
     details: {} as Record<string, any>,
     interpretation: "", // Store personalized interpretation
   });
+
+  // Check if the viewport is mobile-sized
+  useEffect(() => {
+    const checkIfMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+
+    // Initial check
+    checkIfMobile();
+
+    // Add event listener
+    window.addEventListener("resize", checkIfMobile);
+
+    // Show tutorial only on first load on mobile
+    if (window.innerWidth < 768) {
+      const hasSeenTutorial = localStorage.getItem("kabbalah_tutorial_seen");
+      if (!hasSeenTutorial) {
+        setShowTutorial(true);
+        localStorage.setItem("kabbalah_tutorial_seen", "true");
+      }
+    }
+
+    // Cleanup
+    return () => window.removeEventListener("resize", checkIfMobile);
+  }, []);
 
   const resetCamera = () => {
     visualizationRef.current?.resetCamera();
@@ -106,47 +144,242 @@ export default function KabbalahPage() {
     setActiveTab(value);
   };
 
-  return (
-    <div className="w-full h-full flex flex-row bg-[var(--background)] text-[var(--foreground)]">
-      {/* Tree Visualization Panel - Left Side */}
-      <div className="w-[65%] h-full flex flex-col overflow-hidden">
-        <div className="p-4 border-b border-[var(--border)] bg-[var(--card-80)] backdrop-blur-sm flex justify-between items-center">
-          <div>
-            <h1 className="text-2xl font-bold">Kabbalah Tree of Life</h1>
-            <p className="text-sm text-[var(--muted-foreground)] mt-1">
-              Interactive 3D visualization of the mystic tree
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={resetCamera}
-              className="border-[var(--primary)] hover:bg-[var(--primary)]/10"
-            >
-              <RotateCw className="h-4 w-4 mr-2" />
-              Reset View
-            </Button>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={zoomIn}
-              className="border-[var(--secondary)] hover:bg-[var(--secondary)]/10"
-            >
-              <ZoomIn className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={zoomOut}
-              className="border-[var(--secondary)] hover:bg-[var(--secondary)]/10"
-            >
-              <ZoomOut className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
+  const toggleChat = () => {
+    setShowChat(!showChat);
+    // Reset view when toggling to ensure proper rendering
+    if (visualizationRef.current) {
+      setTimeout(() => {
+        resetCamera();
+      }, 100);
+    }
+  };
 
-        <div className="flex-1 relative">
+  const toggleMenu = () => {
+    setMenuOpen(!menuOpen);
+  };
+
+  // Handle touch gestures for swiping up to show chat
+  const handleTouchStart = (e: React.TouchEvent) => {
+    setTouchStartY(e.touches[0].clientY);
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    const touchEndY = e.changedTouches[0].clientY;
+    const deltaY = touchStartY - touchEndY;
+
+    // If swipe up > 50px, show chat
+    if (deltaY > 50 && !showChat && isMobile) {
+      setShowChat(true);
+    }
+    // If swipe down > 50px, hide chat
+    else if (deltaY < -50 && showChat && isMobile) {
+      setShowChat(false);
+    }
+  };
+
+  return (
+    <div
+      className="w-full h-full flex flex-col md:flex-row bg-[var(--background)] text-[var(--foreground)] relative"
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+    >
+      {/* Tutorial Dialog (only shown on first visit) */}
+      <Dialog open={showTutorial} onOpenChange={setShowTutorial}>
+        <DialogContent className="bg-[var(--card)] border-[var(--primary)]/20 max-w-[90vw] md:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <HelpCircle className="w-5 h-5 text-[var(--primary)]" />
+              Welcome to Tree of Life
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="bg-[var(--primary-foreground)]/5 p-3 rounded-md border border-[var(--primary)]/10">
+              <p className="text-[var(--foreground)]/90 text-sm leading-relaxed">
+                To navigate this visualization:
+              </p>
+              <ul className="mt-2 space-y-2 text-sm">
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--primary)] rounded-full border border-[var(--primary)] p-1 inline-flex">
+                    <ChevronLeft className="w-4 h-4" />
+                  </span>
+                  <span>
+                    Swipe up or tap the chat button to explore conversations
+                  </span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--primary)] rounded-full border border-[var(--primary)] p-1 inline-flex">
+                    <ZoomIn className="w-4 h-4" />
+                  </span>
+                  <span>Pinch to zoom the visualization</span>
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="text-[var(--primary)] rounded-full border border-[var(--primary)] p-1 inline-flex">
+                    <Menu className="w-4 h-4" />
+                  </span>
+                  <span>Tap menu for additional options</span>
+                </li>
+              </ul>
+            </div>
+            <Button className="w-full" onClick={() => setShowTutorial(false)}>
+              Start Exploring
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Mobile Header */}
+      {isMobile && (
+        <div className="w-full p-3 border-b border-[var(--border)] bg-[var(--card-80)] backdrop-blur-sm flex justify-between items-center z-10">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleMenu}
+            className="md:hidden"
+          >
+            {menuOpen ? (
+              <X className="h-5 w-5" />
+            ) : (
+              <Menu className="h-5 w-5" />
+            )}
+          </Button>
+          <h1 className="text-lg font-bold">Kabbalah Tree of Life</h1>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={toggleChat}
+            className="md:hidden"
+          >
+            {showChat ? (
+              <ChevronRight className="h-5 w-5" />
+            ) : (
+              <MessageCircle className="h-5 w-5" />
+            )}
+          </Button>
+        </div>
+      )}
+
+      {/* Mobile Menu with Animation */}
+      <AnimatePresence>
+        {isMobile && menuOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            transition={{ duration: 0.2 }}
+            className="absolute top-[53px] left-0 w-full bg-[var(--card)] z-20 border-b border-[var(--border)] shadow-md"
+          >
+            <div className="p-3 flex flex-col gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  resetCamera();
+                  setMenuOpen(false);
+                }}
+                className="w-full justify-start"
+              >
+                <RotateCw className="h-4 w-4 mr-2" />
+                Reset View
+              </Button>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    zoomIn();
+                    setMenuOpen(false);
+                  }}
+                  className="flex-1"
+                >
+                  <ZoomIn className="h-4 w-4 mr-2" />
+                  Zoom In
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    zoomOut();
+                    setMenuOpen(false);
+                  }}
+                  className="flex-1"
+                >
+                  <ZoomOut className="h-4 w-4 mr-2" />
+                  Zoom Out
+                </Button>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setShowTutorial(true);
+                  setMenuOpen(false);
+                }}
+                className="w-full justify-start text-[var(--muted-foreground)]"
+              >
+                <HelpCircle className="h-4 w-4 mr-2" />
+                Show Tutorial
+              </Button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Tree Visualization Panel */}
+      <div
+        className={cn(
+          "h-full flex flex-col overflow-hidden transition-all duration-300 ease-in-out",
+          isMobile
+            ? showChat
+              ? "w-0 opacity-0"
+              : "w-full opacity-100"
+            : "w-[65%]"
+        )}
+      >
+        {/* Desktop Header */}
+        {!isMobile && (
+          <div className="p-4 border-b border-[var(--border)] bg-[var(--card-80)] backdrop-blur-sm flex justify-between items-center">
+            <div>
+              <h1 className="text-2xl font-bold">Kabbalah Tree of Life</h1>
+              <p className="text-sm text-[var(--muted-foreground)] mt-1">
+                Interactive 3D visualization of the mystic tree
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={resetCamera}
+                className="border-[var(--primary)] hover:bg-[var(--primary)]/10"
+              >
+                <RotateCw className="h-4 w-4 mr-2" />
+                Reset View
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={zoomIn}
+                className="border-[var(--secondary)] hover:bg-[var(--secondary)]/10"
+              >
+                <ZoomIn className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={zoomOut}
+                className="border-[var(--secondary)] hover:bg-[var(--secondary)]/10"
+              >
+                <ZoomOut className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <div
+          className={cn(
+            "flex-1 relative",
+            isMobile && !showChat ? "block" : ""
+          )}
+        >
           <TreeOfLifeVisualization
             ref={visualizationRef}
             tree={currentTree}
@@ -156,13 +389,68 @@ export default function KabbalahPage() {
         </div>
       </div>
 
-      {/* Chat Panel - Right Side */}
-      <div className="w-[35%] h-full border-l border-[var(--border)] shadow-lg">
-        <KabbalahChat onTreeUpdate={handleTreeUpdate} />
-      </div>
+      {/* Chat Panel with Slide Animation for Mobile */}
+      <AnimatePresence>
+        <motion.div
+          layout
+          className={cn(
+            "h-full border-l border-[var(--border)] shadow-lg",
+            isMobile ? (showChat ? "w-full" : "w-0 opacity-0") : "w-[35%]"
+          )}
+          initial={isMobile ? { y: "100%" } : false}
+          animate={isMobile && showChat ? { y: 0 } : {}}
+          exit={isMobile ? { y: "100%" } : {}}
+          transition={{ type: "spring", stiffness: 300, damping: 30 }}
+        >
+          {/* Mobile Chat Header */}
+          {isMobile && showChat && (
+            <div className="p-3 border-b border-[var(--border)] bg-[var(--card-80)] flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-[var(--primary)]" />
+                <h2 className="text-lg font-semibold">Kabbalah Guide</h2>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleChat}
+                className="md:hidden"
+              >
+                <ChevronRight className="h-5 w-5" />
+              </Button>
+            </div>
+          )}
+
+          {/* Only render chat when it should be visible */}
+          {(!isMobile || showChat) && (
+            <KabbalahChat onTreeUpdate={handleTreeUpdate} />
+          )}
+        </motion.div>
+      </AnimatePresence>
+
+      {/* Mobile Chat Indicator (when chat is not visible) */}
+      {isMobile && !showChat && (
+        <div className="absolute bottom-24 left-0 right-0 flex justify-center pointer-events-none z-10">
+          <div className="bg-[var(--card)]/70 backdrop-blur-sm px-4 py-2 rounded-full text-xs text-[var(--muted-foreground)] border border-[var(--border)] shadow-md flex items-center gap-2 animate-pulse">
+            <ChevronLeft className="h-3 w-3 transform rotate-90" />
+            <span>Swipe up for insights</span>
+          </div>
+        </div>
+      )}
+
+      {/* Mobile Toggle Button (when chat is not visible) */}
+      {isMobile && !showChat && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={toggleChat}
+          className="absolute bottom-6 right-6 z-10 rounded-full w-12 h-12 shadow-lg bg-[var(--primary)]/90 hover:bg-[var(--primary)] border-none text-white"
+        >
+          <MessageCircle className="h-6 w-6" />
+        </Button>
+      )}
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="bg-[var(--card)] border-[var(--primary)]/20 max-w-md">
+        <DialogContent className="bg-[var(--card)] border-[var(--primary)]/20 max-w-[90vw] md:max-w-md mx-2">
           <DialogHeader>
             <DialogTitle
               className={cn(
@@ -221,7 +509,7 @@ export default function KabbalahPage() {
                 <User className="w-4 h-4" />
                 <span>Interpretation</span>
                 <span
-                  className="text-xs text-muted-foreground ml-1"
+                  className="text-xs text-muted-foreground ml-1 hidden md:inline-block"
                   title="Personalized interpretation based on your conversation"
                 >
                   <Info className="w-3 h-3" />
@@ -237,7 +525,7 @@ export default function KabbalahPage() {
                 <BookOpen className="w-4 h-4" />
                 <span>Essence</span>
                 <span
-                  className="text-xs text-muted-foreground ml-1"
+                  className="text-xs text-muted-foreground ml-1 hidden md:inline-block"
                   title="Traditional Kabbalistic meaning"
                 >
                   <Info className="w-3 h-3" />
