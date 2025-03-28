@@ -86,16 +86,42 @@ export async function getChatCompletion(
   model: string = defaultModel
 ) {
   try {
-    const completion = await openai.chat.completions.create({
-      model,
-      messages,
-      temperature: 0.7,
-      max_tokens: 1000,
-    });
+    // Create an AbortController for timeout
+    const controller = new AbortController();
+    // Set a timeout of 25 seconds
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
 
+    const completion = await openai.chat.completions.create(
+      {
+        model,
+        messages,
+        temperature: 0.7,
+        max_tokens: 1000,
+      },
+      {
+        signal: controller.signal,
+      }
+    );
+
+    clearTimeout(timeoutId);
     return completion.choices[0].message;
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error in chat completion:", error);
+
+    // If it's a timeout error, return a fallback response
+    if (
+      error.name === "AbortError" ||
+      error.code === "ETIMEDOUT" ||
+      error.code === "ECONNABORTED"
+    ) {
+      console.log("Request timed out, returning fallback response");
+      return {
+        role: "assistant",
+        content:
+          "I apologize, but I'm taking longer than expected to process your request. Please try again with a simpler query, or try again later when our systems are less busy.",
+      };
+    }
+
     throw error;
   }
 }

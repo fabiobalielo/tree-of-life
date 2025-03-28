@@ -9,6 +9,9 @@ import {
 } from "@/app/models/TreeOfLife.interface";
 import traditionalTreeOfLife from "@/data/kabbalah/TreeOfLifeData";
 
+// Enable Edge runtime to avoid timeouts
+export const runtime = "edge";
+
 export async function POST(request: Request) {
   try {
     const { messages } = await request.json();
@@ -69,110 +72,140 @@ export async function POST(request: Request) {
         "\n\nNever modify the layout or positions of any elements.",
     });
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4-turbo-preview",
-      messages: formattedMessages,
-      temperature: 0.7,
-      max_tokens: 2500,
-    });
+    // Create AbortController for timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
 
-    const response = completion.choices[0].message;
+    try {
+      const completion = await openai.chat.completions.create(
+        {
+          model: "gpt-4-turbo-preview",
+          messages: formattedMessages,
+          temperature: 0.7,
+          max_tokens: 2500,
+        },
+        {
+          signal: controller.signal,
+        }
+      );
 
-    // Check if response contains a tree update
-    let updatedTree: TreeOfLife | undefined;
-    let responseContent = response.content || "";
+      clearTimeout(timeoutId);
+      const response = completion.choices[0].message;
 
-    if (responseContent) {
-      console.log("Processing AI response to extract tree data...");
+      // Check if response contains a tree update
+      let updatedTree: TreeOfLife | undefined;
+      let responseContent = response.content || "";
 
-      // Use traditionalTreeOfLife as the base structure
-      const baseStructure = traditionalTreeOfLife as TreeOfLifeStructure;
+      if (responseContent) {
+        console.log("Processing AI response to extract tree data...");
 
-      // If the AI didn't provide a tree update (sometimes it forgets), use a fallback
-      if (!responseContent.includes("```json")) {
-        console.log(
-          "No JSON tree update found in response, using fallback tree"
-        );
-        // Use a modified version of the traditional tree as fallback
-        updatedTree = createFallbackTree(responseContent, baseStructure);
-        // Keep the explanation part of the response
-        responseContent = responseContent.trim();
-      } else {
-        // Extract the JSON tree update
-        const treeMatch = responseContent.match(/```json\n([\s\S]*?)\n```/);
-        if (treeMatch && treeMatch[1]) {
-          try {
-            console.log("Found JSON block in response, attempting to parse...");
-            // Clean up the JSON string to remove any potential issues
-            const jsonStr = treeMatch[1]
-              .replace(/0x[0-9a-fA-F]+/g, (match) => `"${match}"`) // Convert hex literals to strings
-              .replace(/,\s*]/g, "]") // Remove trailing commas
-              .replace(/,\s*}/g, "}"); // Remove trailing commas
+        // Use traditionalTreeOfLife as the base structure
+        const baseStructure = traditionalTreeOfLife as TreeOfLifeStructure;
 
-            console.log(
-              "Cleaned JSON string:",
-              jsonStr.substring(0, 100) + "..."
-            );
-
-            let interpretation: Partial<TreeOfLifeInterpretation>;
+        // If the AI didn't provide a tree update (sometimes it forgets), use a fallback
+        if (!responseContent.includes("```json")) {
+          console.log(
+            "No JSON tree update found in response, using fallback tree"
+          );
+          // Use a modified version of the traditional tree as fallback
+          updatedTree = createFallbackTree(responseContent, baseStructure);
+          // Keep the explanation part of the response
+          responseContent = responseContent.trim();
+        } else {
+          // Extract the JSON tree update
+          const treeMatch = responseContent.match(/```json\n([\s\S]*?)\n```/);
+          if (treeMatch && treeMatch[1]) {
             try {
-              interpretation = JSON.parse(jsonStr);
-              console.log("Successfully parsed JSON data");
-            } catch (parseError: any) {
-              console.error("JSON parse error:", parseError);
               console.log(
-                "Attempted to parse:",
-                jsonStr.substring(0, 200) + "..."
+                "Found JSON block in response, attempting to parse..."
               );
-              throw new Error("Failed to parse JSON: " + parseError.message);
-            }
-
-            // Process the tree data to ensure it's valid
-            if (isValidTreeInterpretation(interpretation)) {
-              console.log("Valid TreeOfLifeInterpretation structure found");
-
-              // Create updated tree by combining the structure with the interpretation
-              updatedTree = combineStructureAndInterpretation(
-                baseStructure,
-                interpretation
-              );
+              // Clean up the JSON string to remove any potential issues
+              const jsonStr = treeMatch[1]
+                .replace(/0x[0-9a-fA-F]+/g, (match) => `"${match}"`) // Convert hex literals to strings
+                .replace(/,\s*]/g, "]") // Remove trailing commas
+                .replace(/,\s*}/g, "}"); // Remove trailing commas
 
               console.log(
-                "Successfully created updated tree with",
-                updatedTree.sephiroth.length,
-                "sephiroth and",
-                updatedTree.paths.length,
-                "paths"
+                "Cleaned JSON string:",
+                jsonStr.substring(0, 100) + "..."
               );
 
-              // Remove the JSON data from the response to show only the natural language part
-              responseContent = responseContent
-                .replace(/```json[\s\S]*?```/g, "")
-                .trim();
-            } else {
-              console.error(
-                "Invalid TreeOfLifeInterpretation structure:",
-                Object.keys(interpretation)
-              );
-              throw new Error("Invalid TreeOfLifeInterpretation structure");
+              let interpretation: Partial<TreeOfLifeInterpretation>;
+              try {
+                interpretation = JSON.parse(jsonStr);
+                console.log("Successfully parsed JSON data");
+              } catch (parseError: any) {
+                console.error("JSON parse error:", parseError);
+                console.log(
+                  "Attempted to parse:",
+                  jsonStr.substring(0, 200) + "..."
+                );
+                throw new Error("Failed to parse JSON: " + parseError.message);
+              }
+
+              // Process the tree data to ensure it's valid
+              if (isValidTreeInterpretation(interpretation)) {
+                console.log("Valid TreeOfLifeInterpretation structure found");
+
+                // Create updated tree by combining the structure with the interpretation
+                updatedTree = combineStructureAndInterpretation(
+                  baseStructure,
+                  interpretation
+                );
+
+                console.log(
+                  "Successfully created updated tree with",
+                  updatedTree.sephiroth.length,
+                  "sephiroth and",
+                  updatedTree.paths.length,
+                  "paths"
+                );
+
+                // Remove the JSON data from the response to show only the natural language part
+                responseContent = responseContent
+                  .replace(/```json[\s\S]*?```/g, "")
+                  .trim();
+              } else {
+                console.error(
+                  "Invalid TreeOfLifeInterpretation structure:",
+                  Object.keys(interpretation)
+                );
+                throw new Error("Invalid TreeOfLifeInterpretation structure");
+              }
+            } catch (error) {
+              console.error("Error processing tree update:", error);
+              // Use fallback tree if JSON parsing or processing fails
+              updatedTree = createFallbackTree(responseContent, baseStructure);
             }
-          } catch (error) {
-            console.error("Error processing tree update:", error);
-            // Use fallback tree if JSON parsing or processing fails
+          } else {
+            console.log("No valid JSON found in ```json``` block");
+            // No valid JSON found, use fallback tree
             updatedTree = createFallbackTree(responseContent, baseStructure);
           }
-        } else {
-          console.log("No valid JSON found in ```json``` block");
-          // No valid JSON found, use fallback tree
-          updatedTree = createFallbackTree(responseContent, baseStructure);
         }
       }
-    }
 
-    return NextResponse.json({
-      message: responseContent.trim(),
-      treeUpdate: updatedTree,
-    });
+      return NextResponse.json({
+        message: responseContent.trim(),
+        treeUpdate: updatedTree,
+      });
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      // Handle timeouts with a friendly message
+      if (
+        error.name === "AbortError" ||
+        error.code === "ETIMEDOUT" ||
+        error.code === "ECONNABORTED"
+      ) {
+        console.log("Request timed out, returning fallback response");
+        return NextResponse.json({
+          message:
+            "I'm contemplating your request deeply and need a bit more time. Perhaps we could explore your question in a slightly different way? Please try again with a simpler query.",
+          treeUpdate: undefined,
+        });
+      }
+      throw error; // Re-throw other errors to be caught by outer catch
+    }
   } catch (error) {
     console.error("Error in chat API:", error);
     return NextResponse.json(

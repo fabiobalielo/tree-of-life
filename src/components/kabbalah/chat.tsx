@@ -47,6 +47,17 @@ export function KabbalahChat({ className, onTreeUpdate }: KabbalahChatProps) {
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const agentRef = useRef<KabbalahAgent>(new KabbalahAgent());
+  const [mounted, setMounted] = useState(true);
+
+  // Component mount/unmount effect
+  useEffect(() => {
+    setMounted(true);
+
+    return () => {
+      // Set flag indicating component is unmounted
+      setMounted(false);
+    };
+  }, []);
 
   // Suggested prompts for users
   const suggestedPrompts = [
@@ -119,39 +130,48 @@ export function KabbalahChat({ className, onTreeUpdate }: KabbalahChatProps) {
 
     setMessages((prev) => [...prev, thinkingMessage]);
 
+    // Use AbortController for cleanup
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+
     try {
       // Get response from agent
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: [...messages, userMessage] }),
-        // Add timeout to prevent hanging requests
-        signal: AbortSignal.timeout(30000), // 30 second timeout
+        signal: controller.signal,
       });
 
+      clearTimeout(timeoutId);
+
       if (!response.ok) {
-        throw new Error(
-          `Failed to get response: ${response.status} ${response.statusText}`
-        );
+        throw new Error(`Failed to get response: ${response.status}`);
       }
 
+      // Only proceed if component is still mounted (check with a flag)
       const data = await response.json();
       console.log("Chat API response:", data);
 
       // Remove thinking message and add system response
-      setMessages((prev) =>
-        prev
-          .filter((m) => m.id !== "thinking")
-          .concat({
-            id: Date.now().toString(),
-            sender: "system",
-            content: data.message,
-            timestamp: new Date(),
-          })
-      );
+      if (mounted) {
+        setMessages((prev) => {
+          // Double-check component is mounted by checking if thinking message exists
+          if (!prev.some((m) => m.id === "thinking")) return prev;
+
+          return prev
+            .filter((m) => m.id !== "thinking")
+            .concat({
+              id: Date.now().toString(),
+              sender: "system",
+              content: data.message,
+              timestamp: new Date(),
+            });
+        });
+      }
 
       // Check if response contains a TreeOfLife object
-      if (data.treeUpdate && typeof data.treeUpdate === "object") {
+      if (mounted && data.treeUpdate && typeof data.treeUpdate === "object") {
         console.log("Tree update received:", data.treeUpdate);
 
         // Validate that it matches the TreeOfLife interface
@@ -294,9 +314,18 @@ export function KabbalahChat({ className, onTreeUpdate }: KabbalahChatProps) {
                 duration: 4000,
               });
             }
+
+            // Fire the onTreeUpdate callback if provided
+            onTreeUpdate?.(validatedTree);
+
+            // Update agent's current tree
+            agentRef.current.setCurrentTree(validatedTree);
           } catch (error) {
-            console.error("Error validating tree update:", error);
-            toast.error("Failed to update the Tree of Life visualization");
+            console.error("Error processing tree update:", error);
+            toast.error("Processing Error", {
+              description:
+                "There was an error updating the Tree of Life visualization.",
+            });
           }
         } else {
           console.error("Invalid tree update structure:", data.treeUpdate);
@@ -305,24 +334,35 @@ export function KabbalahChat({ className, onTreeUpdate }: KabbalahChatProps) {
         console.log("No tree update in response");
       }
     } catch (error) {
+      clearTimeout(timeoutId);
       console.error("Error getting response:", error);
-      // Remove thinking message and add error message
-      setMessages((prev) =>
-        prev
-          .filter((m) => m.id !== "thinking")
-          .concat({
-            id: Date.now().toString(),
-            sender: "system",
-            content:
-              "I apologize, but I encountered an error processing your request. Please try again.",
-            timestamp: new Date(),
-          })
-      );
 
-      // Show error toast
-      toast.error("Failed to process your request. Please try again.");
+      // Show error message only if the component is still mounted
+      if (mounted) {
+        setMessages((prev) => {
+          // Check if thinking message still exists (component is mounted)
+          if (!prev.some((m) => m.id === "thinking")) return prev;
+
+          return prev
+            .filter((m) => m.id !== "thinking")
+            .concat({
+              id: Date.now().toString(),
+              sender: "system",
+              content:
+                "I apologize, but I'm having trouble connecting to the wisdom of the Tree of Life. Please try again in a moment.",
+              timestamp: new Date(),
+            });
+        });
+
+        toast.error("Connection Issue", {
+          description:
+            "Failed to connect to the Kabbalah interpreter. Please try again.",
+        });
+      }
     } finally {
-      setIsLoading(false);
+      if (mounted) {
+        setIsLoading(false);
+      }
     }
   };
 

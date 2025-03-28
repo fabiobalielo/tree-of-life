@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
 
+// Use Node.js runtime since we need file system access
+export const runtime = "nodejs";
+
 export async function GET() {
   try {
     const knowledgeBasePath = path.join(
